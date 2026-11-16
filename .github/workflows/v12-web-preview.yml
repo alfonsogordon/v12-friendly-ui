@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -49,6 +49,17 @@ jobs:
           mkdir -p output
           tools/build-wasm-modules.sh "$(pwd)" "$(pwd)/output/"
           test -s output/edgetx-v12-simulator.wasm
+
+      - name: Archive simulator build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-wasm-build-diagnostics
+          path: |
+            output/build_v12.log
+            build/wasm/CMakeFiles/CMakeConfigureLog.yaml
+            build/wasm/CMakeFiles/CMakeError.log
+          if-no-files-found: warn
 
       - name: Stage V12-only web assets
         run: |
@@ -79,6 +90,19 @@ jobs:
           npm ci
           npm run build
           test -s dist/edgetx-v12-simulator.wasm
+
+      - name: Smoke-test generated site
+        run: |
+          test -s web/dist/index.html
+          test -s web/dist/radios.json
+          test -s web/dist/v12-coi-serviceworker.js
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('web/dist/radios.json').read_text())
+          assert len(manifest) == 1 and manifest[0]['wasm'] == 'edgetx-v12-simulator.wasm'
+          assert '/v12-friendly-ui/assets/' in Path('web/dist/index.html').read_text()
+          PY
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
