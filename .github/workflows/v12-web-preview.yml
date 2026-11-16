@@ -1,0 +1,101 @@
+name: V12 web preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v12-friendly-ui-dev]
+    paths:
+      - '.github/workflows/v12-web-preview.yml'
+      - 'radio/**'
+      - 'web/**'
+      - 'tools/build-wasm-modules.sh'
+      - 'tools/build-common.sh'
+      - 'cmake/**'
+      - '.gitmodules'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: v12-web-preview
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build V12 WebAssembly and website
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup Python dependencies
+        uses: ./.github/actions/python_dependencies
+
+      - name: Setup WASI SDK
+        uses: ./.github/actions/wasi_sdk
+        with:
+          arch: x86_64-linux
+
+      - name: Compile V12 simulator
+        env:
+          FLAVOR: v12
+          CMAKE_BUILD_TYPE: Release
+        run: |
+          mkdir -p output
+          tools/build-wasm-modules.sh "$(pwd)" "$(pwd)/output/"
+          test -s output/edgetx-v12-simulator.wasm
+
+      - name: Stage V12-only web assets
+        run: |
+          cp output/edgetx-v12-simulator.wasm web/public/
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("web/public/radios.json")
+          radios = json.loads(p.read_text())
+          v12 = [r for r in radios if r.get("wasm") == "edgetx-v12-simulator.wasm"]
+          if len(v12) != 1:
+              raise SystemExit("Expected exactly one V12 entry in radios.json")
+          p.write_text(json.dumps(v12, indent=2) + "\n")
+          PY
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web simulator for GitHub Pages
+        working-directory: web
+        env:
+          V12_PAGES_BASE: /v12-friendly-ui/
+        run: |
+          npm ci
+          npm run build
+          test -s dist/edgetx-v12-simulator.wasm
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: web/dist
+
+  deploy:
+    name: Publish preview
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
